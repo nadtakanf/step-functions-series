@@ -1,0 +1,54 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Validate Input",
+  "States": {
+    "Validate Input": {
+      "Type": "Task",
+      "Resource": "${ValidateInputFunctionArn} ",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${ValidateInputFunctionName}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "Lambda.AWSLambdaException"
+          ],
+          "Next": "Lambda Exception"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Fail"
+        }
+      ],
+      "Next": "Success"
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Fail": {
+      "Type": "Fail"
+    },
+    "Lambda Exception": {
+      "Comment": "Lambda invoke permission",
+      "Type": "Fail",
+      "Error": "Lambda invoke permission",
+      "Cause": "Lambda Exception"
+    }
+  }
+}

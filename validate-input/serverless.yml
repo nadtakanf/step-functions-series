@@ -1,0 +1,159 @@
+service: step-functions-series-validate-input
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  stage: dev
+  lambdaHashingVersion: 20201221
+
+functions:
+  ValidateInput:
+    handler: src/validate-input.handler
+    role: LambdaRole
+
+resources:
+  Resources:
+    LambdaLoggingPolicy: 
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement: 
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: 
+                - Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*:*
+    
+    LambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - !Ref LambdaLoggingPolicy
+
+    StepFunctionRole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: 'states.amazonaws.com'
+              Action: 'sts:AssumeRole'
+        Policies:
+          - PolicyName: lambda
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action: 'lambda:InvokeFunction'
+                  Resource:
+                    - Fn::GetAtt: [ValidateInputLambdaFunction, Arn]
+                - Effect: Allow
+                  Action: 'lambda:InvokeFunction'
+                  Resource:
+                    - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:step-functions-series-validate-input-${self:provider.stage}-ValidateInput:*
+
+    StepFunctionsPolicy:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        PolicyDocument: 
+          Version: '2012-10-17'
+          Statement: 
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+                - states:SendTaskSuccess
+                - states:SendTaskFailure
+              Resource: 
+                - !Ref ValidateInputStateMachine
+    
+    ValidateInputStateMachine:
+      Type: AWS::StepFunctions::StateMachine
+      Properties:
+        StateMachineName: ValidateInputStateMachine
+        RoleArn: !GetAtt StepFunctionRole.Arn
+        Definition: 
+          {
+            "Comment": "A description of my state machine",
+            "StartAt": "Validate Input",
+            "States": {
+              "Validate Input": {
+                "Type": "Task",
+                "Resource": "${ValidateInputFunctionArn}",
+                "OutputPath": "$.Payload",
+                "Parameters": {
+                  "Payload.$": "$",
+                  "FunctionName": "${ValidateInputFunctionName}"
+                },
+                "Retry": [
+                  {
+                    "ErrorEquals": [
+                      "Lambda.ServiceException",
+                      "Lambda.AWSLambdaException",
+                      "Lambda.SdkClientException"
+                    ],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 1,
+                    "BackoffRate": 2
+                  }
+                ],
+                "Catch": [
+                  {
+                    "ErrorEquals": [
+                      "Lambda.AWSLambdaException"
+                    ],
+                    "Next": "Lambda Exception"
+                  },
+                  {
+                    "ErrorEquals": [
+                      "Runtime.ImportModuleError"
+                    ],
+                    "Next": "Runtime ImportModule Error"
+                  },
+                  {
+                    "ErrorEquals": [
+                      "States.ALL"
+                    ],
+                    "Next": "Fail"
+                  }
+                ],
+                "Next": "Success"
+              },
+              "Success": {
+                "Type": "Succeed"
+              },
+              "Fail": {
+                "Type": "Fail",
+                "Error": "Some error occurred.",
+                "Cause": "Catch all exceptions."
+              },
+              "Lambda Exception": {
+                "Comment": "Lambda Invoke Permission Error.",
+                "Type": "Fail",
+                "Error": "Lambda invoke permission.",
+                "Cause": "Lambda Exception."
+              },
+              "Runtime ImportModule Error": {
+                "Comment": "Lambda invoke permission",
+                "Type": "Fail",
+                "Error": "Lambda invoke permission",
+                "Cause": "Lambda Exception"
+              }
+            }
+          }
+        DefinitionSubstitutions:
+          ValidateInputFunctionArn: arn:aws:states:::lambda:invoke
+          ValidateInputFunctionName: ValidateInputLambdaFunction
+
+
